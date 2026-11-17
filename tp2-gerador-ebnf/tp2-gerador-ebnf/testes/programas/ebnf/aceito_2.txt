@@ -1,0 +1,6 @@
+(* Grupos, opcionais, repeticoes, escapes e regex. *)
+TOKENS
+  NUM = /[0-9]+/ ;
+  SKIP = /[ \t\n]+/ ;
+RULES
+  inicio = [ "\t" ] NUM { ( "+" | '-' ) NUM } ;

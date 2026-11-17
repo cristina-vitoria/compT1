@@ -1,0 +1,2 @@
+TOKENS NUM = /[0-9]+
+RULES inicio = NUM ;

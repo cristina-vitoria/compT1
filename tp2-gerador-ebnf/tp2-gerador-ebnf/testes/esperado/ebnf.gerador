@@ -1,0 +1,18 @@
+NAO TERMINAL  ANULAVEL  FIRST / FOLLOW
+gramatica     nao       FIRST  = {'TOKENS', 'RULES'}
+                        FOLLOW = {$}
+secao_tokens  nao       FIRST  = {'TOKENS'}
+                        FOLLOW = {'RULES'}
+secao_rules   nao       FIRST  = {'RULES'}
+                        FOLLOW = {$}
+def_token     nao       FIRST  = {NOME_TERM, 'SKIP'}
+                        FOLLOW = {NOME_TERM, 'SKIP', 'RULES'}
+regra         nao       FIRST  = {NAOTERM}
+                        FOLLOW = {$, NAOTERM}
+expr          sim       FIRST  = {NOME_TERM, NAOTERM, LITERAL, '|', '(', '[', '{'}
+                        FOLLOW = {';', ')', ']', '}'}
+seq           sim       FIRST  = {NOME_TERM, NAOTERM, LITERAL, '(', '[', '{'}
+                        FOLLOW = {';', '|', ')', ']', '}'}
+fator         nao       FIRST  = {NOME_TERM, NAOTERM, LITERAL, '(', '[', '{'}
+                        FOLLOW = {NOME_TERM, NAOTERM, LITERAL, ';', '|', '(', ')', '[', ']', '{', '}'}
+status 0
