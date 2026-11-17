@@ -1,0 +1,19 @@
+(* Metagramatica da notacao aceita pelo gerador. As verificacoes
+   semanticas (simbolos definidos, LL(1), regex validas) sao posteriores. *)
+TOKENS
+  NOME_TERM = /[A-Z_][A-Z_0-9]*/ ;
+  NAOTERM = /[a-z][a-zA-Z0-9_]*/ ;
+  LITERAL = /"([^"\\\n]|\\[nt\\'"])+"|'([^'\\\n]|\\[nt\\'"])+'/ ;
+  REGEX = /\/([^\/\\\n]|\\.)+\// ;
+  SKIP = /[ \t\r\n]+/ ;
+  SKIP = /\(\*([^*]|\*+[^*)])*\*+\)/ ;
+RULES
+  gramatica = [ secao_tokens ] secao_rules ;
+  secao_tokens = "TOKENS" ( "EXTERN" LITERAL ";" | { def_token } ) ;
+  def_token = ( NOME_TERM | "SKIP" ) "=" REGEX ";" ;
+  secao_rules = "RULES" regra { regra } ;
+  regra = NAOTERM "=" expr ";" ;
+  expr = seq { "|" seq } ;
+  seq = { fator } ;
+  fator = NOME_TERM | NAOTERM | LITERAL | "(" expr ")"
+        | "[" expr "]" | "{" expr "}" ;

@@ -64,7 +64,10 @@ int main(int argc, char **argv)
     OpcoesGeracao op;
 
     for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+        if (strncmp(argv[i], "[--", 3) == 0) {
+            fprintf(stderr, "gerador: escreva as opcoes sem colchetes: %s\n", argv[i]);
+            return EXIT_FAILURE;
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             prefixo = argv[++i];
         } else if (strcmp(argv[i], "--scanner") == 0 && i + 1 < argc) {
             if (strcmp(argv[++i], "microc") != 0) {
@@ -82,6 +85,11 @@ int main(int argc, char **argv)
             uso(argv[0]);
             return EXIT_FAILURE;
         } else {
+            if (arquivo != NULL) {
+                fprintf(stderr, "gerador: informe apenas uma gramatica; argumento inesperado: %s\n",
+                        argv[i]);
+                return EXIT_FAILURE;
+            }
             arquivo = argv[i];
         }
     }

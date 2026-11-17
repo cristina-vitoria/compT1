@@ -38,14 +38,16 @@ MICROC_DIR = build/microc
 
 microc: $(MICROC_DIR)/parser_microc
 
-$(MICROC_DIR)/parser.c $(MICROC_DIR)/parser.h: gerador testes/gramaticas/microc.ebnf microc/tokens.h | build/microc
+$(MICROC_DIR)/parser.c $(MICROC_DIR)/parser.h &: gerador testes/gramaticas/microc.ebnf microc/tokens.h | build/microc
 	./gerador testes/gramaticas/microc.ebnf -o $(MICROC_DIR)/parser --scanner microc --tree
 
 $(MICROC_DIR)/lex.yy.c: microc/microc.flex | build/microc
 	flex -o $@ $<
 
-$(MICROC_DIR)/parser_microc: $(MICROC_DIR)/parser.c $(MICROC_DIR)/lex.yy.c microc/scanner.c microc/scanner.h $(TP1_FONTES)
+$(MICROC_DIR)/lex.yy.o: $(MICROC_DIR)/lex.yy.c microc/tokens.h microc/scanner_interno.h
 	$(CC) $(CFLAGS_FLEX) -Imicroc -c -o $(MICROC_DIR)/lex.yy.o $(MICROC_DIR)/lex.yy.c
+
+$(MICROC_DIR)/parser_microc: $(MICROC_DIR)/parser.c $(MICROC_DIR)/parser.h $(MICROC_DIR)/lex.yy.o microc/scanner.c microc/scanner.h microc/scanner_interno.h microc/tokens.h $(TP1_FONTES)
 	$(CC) $(CFLAGS) -Imicroc -I$(MICROC_DIR) -o $@ $(MICROC_DIR)/parser.c microc/scanner.c \
 		$(TP1_FONTES) $(MICROC_DIR)/lex.yy.o $(LDLIBS_MICROC)
 
@@ -54,7 +56,7 @@ microc/tokens.h microc/microc.flex:
 
 # ---- testes ----
 
-test: test-frontend
+test: test-frontend test-codegen microc
 	sh testes/executar.sh
 
 # Etapas de leitura e analise, independentes da geracao de codigo.
@@ -66,7 +68,23 @@ test-frontend: gerador build/testes/frontend/atributos
 	build/testes/frontend/atributos
 	sh testes/frontend/executar.sh
 
+build/testes/codegen:
+	mkdir -p $@
+
+build/testes/codegen/emitir-automatos: testes/codegen/automatos.c build/obj/automato.o build/obj/bitset.o build/obj/util.o | build/testes/codegen
+	$(CC) $(CFLAGS) -Isrc -o $@ $^
+
+build/testes/codegen/scanner: testes/codegen/scanner.c microc/scanner.c microc/scanner.h microc/scanner_interno.h microc/tokens.h $(MICROC_DIR)/lex.yy.o | build/testes/codegen
+	$(CC) $(CFLAGS) -Imicroc -o $@ testes/codegen/scanner.c microc/scanner.c $(MICROC_DIR)/lex.yy.o
+
+test-codegen: gerador microc build/testes/codegen/emitir-automatos build/testes/codegen/scanner
+	build/testes/codegen/emitir-automatos build/testes/codegen/automatos.c 2> build/testes/codegen/regex-invalidas.log
+	$(CC) $(CFLAGS) -o build/testes/codegen/automatos build/testes/codegen/automatos.c
+	build/testes/codegen/automatos
+	build/testes/codegen/scanner
+	sh testes/codegen/executar.sh
+
 clean:
 	rm -rf build gerador
 
-.PHONY: all microc test test-frontend clean
+.PHONY: all microc test test-frontend test-codegen clean

@@ -17,7 +17,7 @@
 GERADOR=./gerador
 SAIDA=build/testes
 CC=${CC:-gcc}
-CFLAGS=${CFLAGS:-"-ansi -pedantic -Wall -Wextra"}
+CFLAGS=${CFLAGS:-"-ansi -pedantic-errors -Wall -Wextra -Werror"}
 
 total=0
 falhas=0

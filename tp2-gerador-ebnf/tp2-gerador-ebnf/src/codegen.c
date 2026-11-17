@@ -11,16 +11,8 @@
  *   5. um procedimento parse_X() por nao terminal
  *   6. main
  *
- * Fornecido: toda a estrutura acima, os nomes dos tokens, os conjuntos,
- * as primitivas, o lexico (exceto o reconhecimento das expressoes
- * regulares) e a traducao de terminais e nao terminais.
- *
- * TODO(aluno):
- *   - gen_expr: traducao de sequencia, alternativa, [ ] e { }
- *     (esquema da secao 4 do enunciado);
- *   - gen_casamento_regex: converter uma expressao regular de TOKENS em
- *     codigo C (automato finito) que reconhece o maior prefixo;
- *   - gen_token_de_arquivo: leitura do arquivo de tokens do TP1.
+ * As construcoes EBNF sao traduzidas usando os conjuntos precalculados.
+ * O modulo automato.c compila as regex em reconhecedores deterministas.
  */
 #include <ctype.h>
 #include <stdarg.h>
@@ -28,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "codegen.h"
+#include "automato.h"
 #include "microc_mapa.h"
 #include "util.h"
 
@@ -135,7 +128,7 @@ static int nome_em_uso(const Gramatica *g, int ate, const char *nome)
 /* Define g->terms[i].nome_c para todos os terminais. */
 static void nomear_terminais(Gramatica *g, int microc)
 {
-    int i;
+    int i, tentativa;
     size_t k;
     char buf[256];
     Terminal *t;
@@ -165,8 +158,9 @@ static void nomear_terminais(Gramatica *g, int microc)
             if (buf[0] == '\0')
                 sprintf(buf, "T_LIT_%d", i);
         }
-        if (nome_em_uso(g, i, buf))
-            sprintf(buf + strlen(buf), "_%d", i);
+        tentativa = 0;
+        while (nome_em_uso(g, i, buf))
+            sprintf(buf, "T_GERADO_%d_%d", i, tentativa++);
         t->nome_c = xstrdup(buf);
     }
 }
@@ -272,7 +266,7 @@ static void emit_erro(Emissor *em, const Bitset *esperados)
 
 static void gen_expr(Emissor *em, const Gramatica *g, const Expr *e)
 {
-
+    int i, anulavel = -1, escolhas = 0;
     switch (e->tipo) {
     case E_TERM:
         emit(em, "match(%s);", g->terms[e->simbolo].nome_c);
@@ -280,58 +274,48 @@ static void gen_expr(Emissor *em, const Gramatica *g, const Expr *e)
     case E_NAOTERM:
         emit(em, "parse_%s();", g->nts[e->simbolo].nome);
         break;
-    /*
-     * TODO(aluno): traduzir as demais construcoes (secao 4):
-     *
-     *   E_SEQ   a1 a2 ... an   ->  gen_expr de cada filho, em ordem
-     *   E_ALT   a1 | ... | an  ->  if (FIRST(a1)) {...} else if ... else erro
-     *   E_OPC   [ a ]          ->  if (FIRST(a)) { ... }
-     *   E_REP   { a }          ->  while (FIRST(a)) { ... }
-     *   E_VAZIO                ->  nada
-     *
-     * Ferramentas disponiveis neste arquivo:
-     *   emit(em, fmt, ...)                 uma linha indentada
-     *   em->nivel++ / em->nivel--          indentacao dos blocos
-     *   emit_teste(em, "if (", g, &x->first, ") {")
-     *   emit_erro(em, &e->first)           erro_sintatico com os esperados
-     * Os conjuntos FIRST de cada no foram calculados em conjuntos.c.
-     * Uma alternativa anulavel nao tem teste: ela fica no else final,
-     * no lugar do erro.
-     */
-    default:
-        emit(em, "/* TODO(aluno): construcao ainda nao traduzida */");
-        (void) emit_teste;
-        (void) emit_erro;
+    case E_SEQ:
+        for (i = 0; i < e->nfilhos; i++)
+            gen_expr(em, g, e->filhos[i]);
+        break;
+    case E_ALT:
+        for (i = 0; i < e->nfilhos; i++) {
+            if (e->filhos[i]->anulavel) {
+                anulavel = i;
+                continue;
+            }
+            emit_teste(em, escolhas ? "else if (" : "if (", g,
+                       &e->filhos[i]->first, ") {");
+            em->nivel++;
+            gen_expr(em, g, e->filhos[i]);
+            em->nivel--;
+            emit(em, "}");
+            escolhas++;
+        }
+        if (escolhas) {
+            emit(em, "else {");
+            em->nivel++;
+        }
+        if (anulavel >= 0)
+            gen_expr(em, g, e->filhos[anulavel]);
+        else
+            emit_erro(em, &e->first);
+        if (escolhas) {
+            em->nivel--;
+            emit(em, "}");
+        }
+        break;
+    case E_OPC: case E_REP:
+        emit_teste(em, e->tipo == E_OPC ? "if (" : "while (", g,
+                   &e->filhos[0]->first, ") {");
+        em->nivel++;
+        gen_expr(em, g, e->filhos[0]);
+        em->nivel--;
+        emit(em, "}");
+        break;
+    case E_VAZIO:
         break;
     }
-}
-
-/* ------------------------------------------------------------------ */
-/* Expressoes regulares de TOKENS (modo proprio)                      */
-/* ------------------------------------------------------------------ */
-
-/* Emite a funcao
- *     static size_t <nome>(const char *s)
- * que devolve o comprimento do MAIOR prefixo de s reconhecido pela
- * expressao regular, ou 0 se nenhum prefixo for reconhecido.
- * Retorna 0 se a expressao for valida (senao reporte com diag_erro). */
-static int gen_casamento_regex(FILE *f, const char *nome, const char *regex)
-{
-    /* TODO(aluno): converter a expressao regular em automato finito
-     * deterministico (por exemplo: analisar a expressao, construir o AFN
-     * de Thompson e determiniza-lo pela construcao de subconjuntos) e
-     * emitir o automato como codigo C: um switch sobre o estado, com as
-     * transicoes por faixas de caracteres, guardando a ultima posicao em
-     * que o automato passou por um estado final. Subconjunto minimo:
-     * concatenacao, |, *, +, ?, parenteses, classes [a-z] e [^...], o
-     * ponto e escapes como \n, \t, \\ e \/.
-     *
-     * O stub abaixo nao reconhece nada. */
-    fprintf(f, "static size_t %s(const char *s)\n{\n", nome);
-    fputs("    /* TODO(aluno): automato para ", f);
-    emitir_comentario(f, regex);
-    fputs(" */\n    (void) s;\n    return 0;\n}\n\n", f);
-    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -345,25 +329,136 @@ static int gen_casamento_regex(FILE *f, const char *nome, const char *regex)
  *   Token: tipo = <numero>, lexema = '<texto>', linha = <numero>
  *
  * Ao chegar ao fim do arquivo devolve um token TOKEN_FIM. */
-static void gen_token_de_arquivo(FILE *f, int microc)
+static void gen_token_de_arquivo(FILE *f, const Gramatica *g, int microc)
 {
-    /* TODO(aluno): emitir a leitura real com fgets + sscanf (formato
-     * acima). Linhas em branco sao ignoradas; uma linha malformada deve
-     * ser reportada com o numero da linha do arquivo de tokens. */
+    int i;
     static const char *const linhas[] = {
+        "/* Le o formato numerico do livro e os nomes impressos pelo TP1. */",
+        "static void erro_arquivo_tokens(unsigned long linha)",
+        "{",
+        "    fprintf(stderr, \"arquivo de tokens, linha %lu: formato invalido\\n\", linha);",
+        "    exit(EXIT_FAILURE);",
+        "}",
+        "",
+        "static char *brancos_tokens(char *p)",
+        "{",
+        "    while (isspace((unsigned char) *p)) p++;",
+        "    return p;",
+        "}",
+        "",
+        "static char *campo_tokens(char *p, const char *nome, unsigned long linha)",
+        "{",
+        "    size_t n = strlen(nome);",
+        "    p = brancos_tokens(p);",
+        "    if (*p == ',') p = brancos_tokens(p + 1);",
+        "    if (strncmp(p, nome, n) != 0) erro_arquivo_tokens(linha);",
+        "    p = brancos_tokens(p + n);",
+        "    if (*p != '=') erro_arquivo_tokens(linha);",
+        "    return brancos_tokens(p + 1);",
+        "}",
+        "",
+        "static int inteiro_tokens(char **p, unsigned long linha)",
+        "{",
+        "    char *fim;",
+        "    long n;",
+        "    errno = 0;",
+        "    n = strtol(*p, &fim, 10);",
+        "    if (fim == *p || errno == ERANGE || n < 1 || n > INT_MAX)",
+        "        erro_arquivo_tokens(linha);",
+        "    *p = fim;",
+        "    return (int) n;",
+        "}",
+        "",
         "static Token token_de_arquivo(void)",
         "{",
+        "    static unsigned long linha_arquivo = 0;",
+        "    static int ultima_linha = 1;",
         "    Token t;",
+        "    char linha[4096], tipo[128], *p, *fim, *numero_fim;",
+        "    size_t n;",
+        "    long numero;",
         "    memset(&t, 0, sizeof t);",
-        "    fprintf(stderr, \"opcao --tokens ainda nao implementada\\n\");",
-        "    exit(EXIT_FAILURE);",
+        "    t.tipo = TOKEN_FIM;",
+        "    t.linha = ultima_linha;",
+        "    while (fgets(linha, sizeof linha, arquivo_tokens) != NULL) {",
+        "        linha_arquivo++;",
+        "        n = strlen(linha);",
+        "        if (n == sizeof linha - 1 && linha[n - 1] != '\\n')",
+        "            erro_arquivo_tokens(linha_arquivo);",
+        "        p = brancos_tokens(linha);",
+        "        if (*p == '\\0') continue;",
+        "        if (strncmp(p, \"Token:\", 6) != 0) erro_arquivo_tokens(linha_arquivo);",
+        "        p = campo_tokens(p + 6, \"tipo\", linha_arquivo);",
+        "        fim = p;",
+        "        while (*fim && *fim != ',' && !isspace((unsigned char) *fim)) fim++;",
+        "        n = (size_t) (fim - p);",
+        "        if (n == 0 || n >= sizeof tipo) erro_arquivo_tokens(linha_arquivo);",
+        "        memcpy(tipo, p, n);",
+        "        tipo[n] = '\\0';",
+        "        errno = 0;",
+        "        numero = strtol(tipo, &numero_fim, 10);",
+        "        if (*numero_fim == '\\0' && numero_fim != tipo) {",
+        "            if (errno == ERANGE || numero < 0 || numero > INT_MAX)",
+        "                erro_arquivo_tokens(linha_arquivo);",
+        "            t.tipo = numero;",
+        "        } else {",
+        "            t.tipo = tipo_de_nome(tipo);",
+        "            if ((int) t.tipo == -1) erro_arquivo_tokens(linha_arquivo);",
+        "        }",
+        "        p = campo_tokens(fim, \"lexema\", linha_arquivo);",
+        "        if (*p != '\\'') erro_arquivo_tokens(linha_arquivo);",
+        "        p++;",
+        "        fim = strrchr(p, '\\'');",
+        "        if (fim == NULL) erro_arquivo_tokens(linha_arquivo);",
+        "        n = (size_t) (fim - p);",
+        "        if (n >= sizeof t.lexema) erro_arquivo_tokens(linha_arquivo);",
+        "        memcpy(t.lexema, p, n);",
+        "        t.lexema[n] = '\\0';",
+        "        t.tamanho = n;",
+        "        p = campo_tokens(fim + 1, \"linha\", linha_arquivo);",
+        "        t.linha = inteiro_tokens(&p, linha_arquivo);",
+        "        if (*brancos_tokens(p) != '\\0') erro_arquivo_tokens(linha_arquivo);",
+        "        ultima_linha = t.linha;",
+        "        if ((int) t.tipo == TOKEN_FIM) {",
+        "            while (fgets(linha, sizeof linha, arquivo_tokens) != NULL) {",
+        "                linha_arquivo++;",
+        "                if (*brancos_tokens(linha) != '\\0') erro_arquivo_tokens(linha_arquivo);",
+        "            }",
+        "            if (ferror(arquivo_tokens)) erro_arquivo_tokens(linha_arquivo + 1);",
+        "        }",
+        "        return t;",
+        "    }",
+        "    if (ferror(arquivo_tokens)) erro_arquivo_tokens(linha_arquivo + 1);",
         "    return t;",
         "}",
         "",
         NULL
     };
-    (void) microc;
-    emit_linhas(f, linhas);
+    fputs("static int tipo_de_nome(const char *nome)\n{\n", f);
+    for (i = 0; i < g->nterms; i++) {
+        fputs("    if (strcmp(nome, ", f);
+        emitir_string_c(f, g->terms[i].nome_c);
+        fprintf(f, ") == 0) return %s;\n", g->terms[i].nome_c);
+        if (!g->terms[i].literal) {
+            fputs("    if (strcmp(nome, ", f);
+            emitir_string_c(f, g->terms[i].nome);
+            fprintf(f, ") == 0) return %s;\n", g->terms[i].nome_c);
+        }
+    }
+    if (microc)
+        fputs("    if (strcmp(nome, \"UNDEF\") == 0) return UNDEF;\n", f);
+    fputs("    return -1;\n}\n\n", f);
+    for (i = 0; linhas[i] != NULL; i++) {
+        fprintf(f, "%s\n", linhas[i]);
+        if (!microc && strcmp(linhas[i], "    t.linha = ultima_linha;") == 0)
+            fputs("    t.coluna = 1;\n", f);
+        if (!microc && strcmp(linhas[i], "        t.linha = inteiro_tokens(&p, linha_arquivo);") == 0)
+            fputs("        p = brancos_tokens(p);\n"
+                  "        if (*p != '\\0') {\n"
+                  "            p = campo_tokens(p, \"coluna\", linha_arquivo);\n"
+                  "            t.coluna = inteiro_tokens(&p, linha_arquivo);\n"
+                  "        }\n", f);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -373,6 +468,7 @@ static void gen_token_de_arquivo(FILE *f, int microc)
 static const char *const rt_estado[] = {
     "/* ---- estado do analisador ---- */",
     "",
+    "static FILE *entrada_fonte = NULL;",
     "static Token tok;                  /* token corrente (lookahead) */",
     "static int imprimir_arvore = 0;    /* opcao --tree */",
     "static int nivel_arvore = 0;",
@@ -479,11 +575,17 @@ static const char *const rt_lexico_estado[] = {
     "            cap *= 2;",
     "            novo = (char *) realloc(buf, cap);",
     "            if (novo == NULL) {",
+    "                free(buf);",
     "                fprintf(stderr, \"memoria insuficiente\\n\");",
     "                exit(EXIT_FAILURE);",
     "            }",
     "            buf = novo;",
     "        }",
+    "    }",
+    "    if (ferror(f) || memchr(buf, 0, n) != NULL) {",
+    "        fprintf(stderr, \"erro de leitura ou byte nulo na entrada\\n\");",
+    "        free(buf);",
+    "        exit(EXIT_FAILURE);",
     "    }",
     "    buf[n] = '\\0';",
     "    return buf;",
@@ -515,21 +617,12 @@ static void escrever_cabecalho_c(FILE *f, const OpcoesGeracao *op)
 /* Arquivo .h                                                         */
 /* ------------------------------------------------------------------ */
 
-static int gerar_h(const Gramatica *g, const OpcoesGeracao *op)
+static int gerar_h(FILE *f, const Gramatica *g, const OpcoesGeracao *op)
 {
-    char *caminho = (char *) xmalloc(strlen(op->prefixo) + 3);
-    FILE *f;
     int i;
 
-    sprintf(caminho, "%s.h", op->prefixo);
-    f = fopen(caminho, "w");
-    if (f == NULL) {
-        diag_erro(0, 0, "nao foi possivel criar %s", caminho);
-        free(caminho);
-        return -1;
-    }
     escrever_cabecalho_c(f, op);
-    fputs("#ifndef PARSER_GERADO_H\n#define PARSER_GERADO_H\n\n", f);
+    fputs("#ifndef PARSER_GERADO_H\n#define PARSER_GERADO_H\n\n#include <stddef.h>\n\n", f);
     if (op->microc) {
         fputs("#include \"scanner.h\"   /* scanner do TP1: Token, TokenType, proximo_token */\n\n", f);
         fputs("#define TOKEN_FIM END_OF_FILE\n\n", f);
@@ -542,7 +635,7 @@ static int gerar_h(const Gramatica *g, const OpcoesGeracao *op)
         }
         fputs("} TipoToken;\n\n", f);
         fputs("typedef struct {\n    int tipo;\n    char lexema[100];\n"
-              "    int linha;\n    int coluna;\n} Token;\n\n", f);
+              "    int linha;\n    int coluna;\n    size_t tamanho;\n} Token;\n\n", f);
         fputs("#define TOKEN_FIM T_FIM\n\n", f);
     }
     fputs("const char *nome_token(int tipo);\n", f);
@@ -556,8 +649,6 @@ static int gerar_h(const Gramatica *g, const OpcoesGeracao *op)
         if (g->nts[i].regra != NULL)
             fprintf(f, "void parse_%s(void);\n", g->nts[i].nome);
     fputs("\n#endif\n", f);
-    fclose(f);
-    free(caminho);
     return 0;
 }
 
@@ -601,7 +692,7 @@ static void gerar_posicao_e_avancar(FILE *f, int microc)
 
 static int gerar_lexico(FILE *f, const Gramatica *g)
 {
-    int i, nlit = 0, erros = 0;
+    int i, erros = 0;
     char nome[300];
 
     emit_linhas(f, rt_lexico_estado);
@@ -611,19 +702,17 @@ static int gerar_lexico(FILE *f, const Gramatica *g)
         fputs("/* SKIP: ", f);
         emitir_comentario(f, g->skips[i]);
         fputs(" */\n", f);
-        if (gen_casamento_regex(f, nome, g->skips[i]) != 0)
+        if (regex_emitir(f, nome, g->skips[i]) != 0)
             erros++;
     }
     for (i = 1; i < g->nterms; i++) {
-        if (g->terms[i].literal) {
-            nlit++;
+        if (g->terms[i].literal)
             continue;
-        }
         sprintf(nome, "casa_%.250s", g->terms[i].nome_c);
         fprintf(f, "/* %s: ", g->terms[i].nome);
         emitir_comentario(f, g->terms[i].regex ? g->terms[i].regex : "");
         fputs(" */\n", f);
-        if (gen_casamento_regex(f, nome, g->terms[i].regex ? g->terms[i].regex : "")
+        if (regex_emitir(f, nome, g->terms[i].regex ? g->terms[i].regex : "")
             != 0)
             erros++;
     }
@@ -645,12 +734,12 @@ static int gerar_lexico(FILE *f, const Gramatica *g)
     fputs("/* Reconhece o maior prefixo da entrada; em caso de empate vence\n"
           " * o literal (palavras reservadas tem prioridade sobre ID). */\n", f);
     fputs("static Token proximo_token_gerado(void)\n{\n", f);
-    fputs("    Token t;\n    size_t n, melhor;\n    int i, tipo, pulou;\n\n", f);
-    fputs("    do {\n        pulou = 0;\n", f);
+    fputs("    Token t;\n    size_t n, melhor;\n    int i, tipo;\n\n", f);
+    fputs("    do {\n        melhor = 0;\n", f);
     for (i = 0; i < g->nskips; i++)
-        fprintf(f, "        if ((n = casa_skip_%d(fonte + pos)) > 0) {\n"
-                   "            consumir(n);\n            pulou = 1;\n        }\n", i);
-    fputs("    } while (pulou);\n\n", f);
+        fprintf(f, "        if ((n = casa_skip_%d(fonte + pos)) > melhor) melhor = n;\n", i);
+    fputs("        if (melhor > 0) consumir(melhor);\n"
+          "    } while (melhor > 0);\n\n", f);
     fputs("    memset(&t, 0, sizeof t);\n", f);
     fputs("    t.linha = linha;\n    t.coluna = coluna;\n", f);
     fputs("    if (fonte[pos] == '\\0') {\n        t.tipo = T_FIM;\n        return t;\n    }\n", f);
@@ -668,10 +757,11 @@ static int gerar_lexico(FILE *f, const Gramatica *g)
     fputs("        fprintf(stderr, \"linha %d, coluna %d: erro lexico: caractere "
           "invalido '%c'\\n\",\n                linha, coluna, fonte[pos]);\n", f);
     fputs("        exit(EXIT_FAILURE);\n    }\n", f);
-    fputs("    n = melhor < sizeof t.lexema ? melhor : sizeof t.lexema - 1;\n", f);
+    fputs("    if (melhor >= sizeof t.lexema) {\n"
+          "        fprintf(stderr, \"linha %d, coluna %d: lexema excede limite de 99 bytes\\n\", linha, coluna);\n"
+          "        exit(EXIT_FAILURE);\n    }\n    n = melhor;\n    t.tamanho = n;\n", f);
     fputs("    memcpy(t.lexema, fonte + pos, n);\n    t.lexema[n] = '\\0';\n", f);
     fputs("    t.tipo = tipo;\n    consumir(melhor);\n    return t;\n}\n\n", f);
-    (void) nlit;
     return erros;
 }
 
@@ -690,15 +780,17 @@ static void gerar_procedimentos(FILE *f, const Gramatica *g, const OpcoesGeracao
         {
             /* a regra em EBNF, sem "* /" */
             FILE *tmp = tmpfile();
-            int c;
             if (tmp != NULL) {
-                char buf[2] = { 0, 0 };
+                char *texto;
+                size_t n;
                 expr_imprimir(tmp, g, g->nts[i].regra);
+                n = (size_t) ftell(tmp);
+                texto = (char *) xmalloc(n + 1);
                 rewind(tmp);
-                while ((c = fgetc(tmp)) != EOF) {
-                    buf[0] = (char) c;
-                    emitir_comentario(f, buf);
-                }
+                n = fread(texto, 1, n, tmp);
+                texto[n] = '\0';
+                emitir_comentario(f, texto);
+                free(texto);
                 fclose(tmp);
             }
         }
@@ -714,12 +806,27 @@ static void gerar_procedimentos(FILE *f, const Gramatica *g, const OpcoesGeracao
     }
 }
 
+static void gerar_finalizacao(FILE *f, int microc)
+{
+    if (microc)
+        fputs("static int scanner_ativo = 0;\n\n", f);
+    fputs("static void finalizar(void)\n{\n"
+          "    if (arquivo_tokens != NULL) fclose(arquivo_tokens);\n", f);
+    if (microc)
+        fputs("    if (scanner_ativo) scanner_finalizar();\n", f);
+    else
+        fputs("    free(fonte);\n", f);
+    fputs("    if (entrada_fonte != NULL && entrada_fonte != stdin)\n"
+          "        fclose(entrada_fonte);\n}\n\n", f);
+}
+
 static void gerar_main(FILE *f, const Gramatica *g, const OpcoesGeracao *op)
 {
     fputs("/* ---- programa principal ---- */\n\n", f);
     fputs("int main(int argc, char **argv)\n{\n", f);
     fputs("    int i, fim[2];\n    const char *arquivo = NULL, *tokens = NULL;\n", f);
     fputs("    FILE *entrada = stdin;\n\n", f);
+    fputs("    if (atexit(finalizar) != 0) return EXIT_FAILURE;\n\n", f);
     fputs("    for (i = 1; i < argc; i++) {\n", f);
     fputs("        if (strcmp(argv[i], \"--tree\") == 0) {\n", f);
     fputs("            imprimir_arvore = 1;\n", f);
@@ -741,8 +848,9 @@ static void gerar_main(FILE *f, const Gramatica *g, const OpcoesGeracao *op)
     fputs("        if (arquivo != NULL && (entrada = fopen(arquivo, \"r\")) == NULL) {\n", f);
     fputs("            fprintf(stderr, \"nao foi possivel abrir %s\\n\", arquivo);\n", f);
     fputs("            return 2;\n        }\n", f);
+    fputs("        entrada_fonte = entrada;\n", f);
     if (op->microc)
-        fputs("        scanner_iniciar(entrada);\n", f);
+        fputs("        scanner_ativo = 1;\n        scanner_iniciar(entrada);\n", f);
     else
         fputs("        fonte = ler_tudo(entrada);\n", f);
     fputs("    }\n\n", f);
@@ -752,13 +860,6 @@ static void gerar_main(FILE *f, const Gramatica *g, const OpcoesGeracao *op)
     fputs("        fim[0] = TOKEN_FIM;\n        fim[1] = -1;\n", f);
     fputs("        erro_sintatico(fim);\n    }\n", f);
     fputs("    printf(\"entrada aceita\\n\");\n\n", f);
-    fputs("    if (arquivo_tokens != NULL) {\n        fclose(arquivo_tokens);\n", f);
-    fputs("    } else {\n", f);
-    if (op->microc)
-        fputs("        scanner_finalizar();\n", f);
-    else
-        fputs("        free(fonte);\n", f);
-    fputs("        if (entrada != stdin)\n            fclose(entrada);\n    }\n", f);
     fputs("    return 0;\n}\n", f);
 }
 
@@ -768,10 +869,9 @@ static const char *nome_base(const char *caminho)
     return b != NULL ? b + 1 : caminho;
 }
 
-static int gerar_c(const Gramatica *g, const OpcoesGeracao *op)
+static int gerar_c(FILE *f, const Gramatica *g, const OpcoesGeracao *op)
 {
-    char *caminho = (char *) xmalloc(strlen(op->prefixo) + 3);
-    FILE *f, *corpo;
+    FILE *corpo;
     int c, erros = 0;
 
     /* Os procedimentos sao gerados primeiro num arquivo temporario porque
@@ -779,21 +879,12 @@ static int gerar_c(const Gramatica *g, const OpcoesGeracao *op)
     corpo = tmpfile();
     if (corpo == NULL) {
         diag_erro(0, 0, "nao foi possivel criar arquivo temporario");
-        free(caminho);
         return -1;
     }
     gerar_procedimentos(corpo, g, op);
 
-    sprintf(caminho, "%s.c", op->prefixo);
-    f = fopen(caminho, "w");
-    if (f == NULL) {
-        diag_erro(0, 0, "nao foi possivel criar %s", caminho);
-        fclose(corpo);
-        free(caminho);
-        return -1;
-    }
     escrever_cabecalho_c(f, op);
-    fputs("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n", f);
+    fputs("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <ctype.h>\n#include <errno.h>\n#include <limits.h>\n", f);
     fprintf(f, "#include \"%s.h\"\n\n", nome_base(op->prefixo));
     fprintf(f, "#define SUPORTE_ARVORE %d\n\n", op->arvore ? 1 : 0);
 
@@ -804,10 +895,11 @@ static int gerar_c(const Gramatica *g, const OpcoesGeracao *op)
     emit_linhas(f, rt_estado);
     if (!op->microc)
         erros += gerar_lexico(f, g);
+    gerar_finalizacao(f, op->microc);
     gerar_nome_token(f, g);
     gerar_posicao_e_avancar(f, op->microc);
     emit_linhas(f, rt_primitivas);
-    gen_token_de_arquivo(f, op->microc);
+    gen_token_de_arquivo(f, g, op->microc);
 
     rewind(corpo);
     while ((c = fgetc(corpo)) != EOF)
@@ -815,18 +907,52 @@ static int gerar_c(const Gramatica *g, const OpcoesGeracao *op)
     fclose(corpo);
 
     gerar_main(f, g, op);
-    fclose(f);
-    free(caminho);
     return erros == 0 ? 0 : -1;
+}
+
+static int gravar_saida(FILE *origem, const char *prefixo, const char *extensao)
+{
+    char *caminho = (char *) xmalloc(strlen(prefixo) + strlen(extensao) + 1);
+    FILE *destino;
+    int c, falhou;
+    sprintf(caminho, "%s%s", prefixo, extensao);
+    destino = fopen(caminho, "w");
+    if (destino == NULL) {
+        diag_erro(0, 0, "nao foi possivel criar %s", caminho);
+        free(caminho);
+        return -1;
+    }
+    rewind(origem);
+    while ((c = fgetc(origem)) != EOF)
+        fputc(c, destino);
+    falhou = ferror(origem) || ferror(destino);
+    if (fclose(destino) != 0)
+        falhou = 1;
+    if (falhou) {
+        diag_erro(0, 0, "falha ao gravar %s", caminho);
+        remove(caminho);
+    }
+    free(caminho);
+    return falhou ? -1 : 0;
 }
 
 int codegen_gerar(Gramatica *g, const OpcoesGeracao *op)
 {
-    int r;
-    nomear_terminais(g, op->microc);
-    r = gerar_h(g, op);
-    if (r == 0)
-        r = gerar_c(g, op);
+    int r = -1;
+    FILE *h = tmpfile(), *c = tmpfile();
+    if (h == NULL || c == NULL) {
+        diag_erro(0, 0, "nao foi possivel criar arquivos temporarios");
+    } else {
+        nomear_terminais(g, op->microc);
+        if (gerar_h(h, g, op) == 0 && gerar_c(c, g, op) == 0
+            && !ferror(h) && !ferror(c)) {
+            r = gravar_saida(h, op->prefixo, ".h");
+            if (r == 0)
+                r = gravar_saida(c, op->prefixo, ".c");
+        }
+    }
+    if (h != NULL) fclose(h);
+    if (c != NULL) fclose(c);
     liberar_conjuntos();
     return r;
 }

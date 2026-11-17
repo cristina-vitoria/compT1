@@ -1,80 +1,166 @@
-
+aluno: 202519040618
+uso_ia: sim
 
 # Compiladores I — Trabalho Prático 2: Gerador de Analisadores Sintáticos Descendentes Recursivos
 
-Código-base do gerador. Ele lê uma gramática em EBNF e gera, em ANSI C, um analisador sintático descendente recursivo para a linguagem descrita. Veja o enunciado para os requisitos completos.
+Implementação a partir do código-base do gerador. Ele lê uma gramática em EBNF e gera, em ANSI C, um analisador sintático descendente recursivo para a linguagem descrita. Veja o enunciado para os requisitos completos.
+
 
 ## Compilar e executar
 
-```
-make                      # compila o gerador (e o analisador de Micro C, se o TP1 estiver em microc/)
-make test                 # executa os testes de testes/
-make microc               # gera e compila build/microc/parser_microc
+Execute os comandos nesta pasta, onde está o `Makefile`:
+
+```sh
 make clean
+make                      # compila o gerador e o analisador de Micro C
+make test                 # executa os testes de testes/
 ```
 
+Para gerar, compilar e executar um analisador de expressões, copie este exemplo
+com os arquivos que já existem no projeto:
+
+```sh
+mkdir -p build/exemplo
+./gerador testes/gramaticas/expr.ebnf -o build/exemplo/parser --tree
+gcc -ansi -pedantic -Wall -Wextra -o build/exemplo/analisador build/exemplo/parser.c
+./build/exemplo/analisador testes/programas/expr/aceito_1.txt
+./build/exemplo/analisador --tree testes/programas/expr/aceito_1.txt
 ```
-./gerador gramatica.ebnf -o saida/parser [--scanner microc] [--sets] [--tree] [--debug]
-gcc -ansi -pedantic -Wall -Wextra -o parser saida/parser.c
-./parser [--tree] programa.txt        # ou: ./parser --tokens tokens.txt
+
+O analisador imprime `entrada aceita`; a última linha também imprime a árvore
+de derivação. O diretório de saída deve existir antes de executar o gerador.
+
+Para apenas consultar a gramática lida e os conjuntos, sem gerar arquivos:
+
+```sh
+./gerador testes/gramaticas/expr.ebnf --sets --debug
 ```
+
+Para executar Micro C, use o alvo que também vincula o scanner do TP1:
+
+```sh
+make microc
+./build/microc/parser_microc testes/programas/microc/soma.mc
+./build/microc/parser_microc --tree testes/programas/microc/else_pendente.mc
+```
+
+As opções são facultativas. `--tree` no
+gerador habilita a impressão da árvore; `--tree` no analisador solicita essa
+impressão. `--scanner microc` é usado apenas com gramáticas `TOKENS EXTERN`,
+como `testes/gramaticas/microc.ebnf`; o comando `make microc` já o inclui.
+Os nomes `gramatica.ebnf` e `programa.txt` eram exemplos genéricos: use os
+caminhos dos seus arquivos ou os exemplos acima.
+
+Requisitos de construção: GCC, Flex e GNU Make 4.3 ou posterior.
 
 Todo o código deve compilar sem avisos com `gcc -ansi -pedantic -Wall -Wextra`. A única exceção é o `lex.yy.c` gerado pelo flex.
 
 ## Estado da implementação
 
-As etapas de leitura e análise da gramática estão implementadas. O executável
-compila em ANSI C sem avisos; a geração dos analisadores ainda contém os stubs
-do código-base e não está concluída.
+O gerador lê e valida EBNF e produz analisadores funcionais em ANSI C.
+Há dois modos: scanner gerado a partir de regex e scanner de Micro C do TP1.
 
 | Etapa | Estado |
 | --- | --- |
-| Leitura EBNF | Implementada: sequência, alternativa, grupo, opcional, repetição e sequência vazia; árvores com posição de origem. |
-| Verificação semântica | Implementada: indefinidos, duplicados, terminais não declarados, inalcançáveis, improdutivos e recursão à esquerda direta/indireta por prefixos anuláveis. |
-| Conjuntos | Implementada: anulável, FIRST e FOLLOW por ponto fixo, para regras e subexpressões. |
-| LL(1) | Implementada: conflitos fatais e avisos com decisão gulosa para interseções FIRST/FOLLOW em opcionais e repetições. |
-| Tokens externos | Implementada: leitura dos nomes de `TokenType`, incluindo enum com tag, comentários e valores explícitos. Falha ao ler o cabeçalho é erro. |
-| Geração de código | Pendente: tradução das construções, regex em autômatos e leitura de arquivos de tokens. |
-| Scanner Micro C | `microc/tokens.h` extraído do TP1; cópia/adaptação do scanner ainda pendente. |
-| Extras | Pendentes: recuperação de erros no analisador gerado, AST, correção automática de conflitos e metagramática EBNF. |
+| Leitura EBNF | Sequência, alternativa, grupo, opcional, repetição e sequência vazia, com posição de origem. |
+| Verificação semântica | Indefinidos, duplicados, terminais não declarados, inalcançáveis, improdutivos e recursão à esquerda direta/indireta por prefixos anuláveis. |
+| Conjuntos | Anulável, FIRST e FOLLOW por ponto fixo, para regras e subexpressões. |
+| LL(1) | Conflitos fatais e avisos com decisão gulosa em opcionais e repetições. |
+| Tokens externos | Leitura de `TokenType`, incluindo enum com tag, comentários e valores explícitos. |
+| Geração de código | Procedimentos recursivos, conjuntos constantes, diagnósticos, comentários com as regras e árvore de derivação (`--tree`). |
+| Scanner gerado | Regex → AFN de Thompson → AFD por subconjuntos → AFD mínimo por refinamento de partições → C com `switch`. |
+| Scanner Micro C | Integrado, sob demanda, com mensagens léxicas, posição inicial, escapes e liberação de recursos. |
+| Arquivos de tokens | `--tokens` aceita tipos numéricos e nomes de tokens, com diagnóstico de linhas malformadas. |
 
-Para conferir a etapa atual:
+O código gerado libera arquivos e buffers com `atexit`, inclusive quando encontra
+erros. Gramáticas ou regex inválidas não criam saídas parciais nem sobrescrevem
+analisadores anteriores.
+
+## Expressões regulares
+
+Suporte: concatenação, `|`, `*`, `+`, `?`, agrupamento, classes e intervalos,
+classes negadas, ponto (exceto quebra de linha), escapes `\n`, `\t`, `\r`,
+`\f`, `\v` e pontuação escapada. O alfabeto corresponde aos bytes de 1 a 255.
+Padrões que aceitam a cadeia vazia são rejeitados para tokens e `SKIP`.
+O limite de determinização é 4096 estados; o limite de grupos aninhados é 256.
+
+O scanner escolhe o maior prefixo. Em empate, literais vencem tokens nomeados;
+entre tokens nomeados, vence a ordem de declaração. As diretivas `SKIP` são
+aplicadas antes de reconhecer o próximo token, escolhendo o maior prefixo
+entre os padrões de descarte.
+
+A interface `Token` mantém o limite de 99 bytes de conteúdo do código-base;
+lexemas maiores são erros explícitos. No scanner Micro C, `Token.tamanho`
+preserva o comprimento de caracteres e strings com `\0` interno. Byte nulo
+literal no arquivo de entrada não faz parte da notação textual suportada.
+
+## Integração com o TP1
+
+`microc/microc.flex` é uma cópia adaptada do scanner original em `../../microc.flex`.
+Ela usa o prefixo `microc_yy`, não contém `main`, não imprime mensagens e retorna
+os valores de `TokenType`. O adaptador `microc/scanner.c` fornece a interface
+`scanner_iniciar`, `proximo_token` e `scanner_finalizar`.
+
+A gramática Micro C segue a versão fatorada do código-base. O `else` pendente
+produz aviso e se associa ao `if` mais próximo. Essa gramática não descreve todas
+as construções de C: por exemplo, exige declarações no início dos blocos e não
+inclui definições ou chamadas de funções arbitrárias.
 
 ```sh
-make test-frontend
-./gerador testes/gramaticas/expr.ebnf --debug --sets
-./gerador testes/gramaticas/microc.ebnf --scanner microc --sets
+make microc
+build/microc/parser_microc testes/programas/microc/soma.mc
+build/microc/parser_microc --tree testes/programas/microc/else_pendente.mc
 ```
 
-`make test-frontend` executa 40 casos de leitura/verificação e um teste em C dos
-atributos das subexpressões. Ele também verifica que gramáticas inválidas não
-produzem arquivos de analisador. `make test` executa essa etapa e os testes
-originais: os quatro testes de gramáticas passam; os sete programas de expressões
-ainda falham, e os programas Micro C aguardam a integração do scanner.
+## Arquivos de tokens
 
-Validação desta etapa: compilação com `-ansi -pedantic-errors -Wall -Wextra
--Werror`, 40 casos de regressão e o teste dos atributos internos aprovados.
-Os mesmos casos e a análise da gramática Micro C foram executados com Valgrind,
-sem erros de memória ou vazamentos detectados.
+Os formatos abaixo são aceitos, com vírgulas opcionais entre os campos:
 
-A recuperação de erros já fornecida no leitor de gramáticas não corresponde ao
-extra de recuperação no analisador gerado. Da mesma forma, a árvore `Expr` da
-gramática e a árvore de derivação de `--tree` não correspondem ao extra de AST.
-O bônus total previsto no enunciado é limitado a dois pontos.
+```text
+Token: tipo = 1, lexema = '2', linha = 1
+Token: tipo = NUM  lexema = '2'  linha = 1
+Token: tipo = T_NUM, lexema = '2', linha = 1, coluna = 4
+```
 
-Módulos de apoio fornecidos: `util.c`, `bitset.c`, `gramatica.c` e `main.c`.
-
-## Integração com o scanner do TP1 (seção 3.1 do enunciado)
-
-1. Copie `microc.flex`, `tokens.h` e os demais `.c`/`.h` do seu TP1, como a tabela de strings, para `microc/`.
-2. No `microc.flex`, use `%option prefix="microc_yy" noyywrap` e devolva `END_OF_FILE` na regra `<<EOF>>`.
-3. Ajuste `microc/scanner.c` ao seu TP1: lexema vindo da tabela de strings e mensagem de erro de `error_msg` no token UNDEF.
-4. Rode `make microc` e `make test`.
-
-A gramática `testes/gramaticas/microc.ebnf` é a do Apêndice B do livro-texto, fatorada para LL(1). O `else` pendente gera um aviso de conflito em `[ "else" comando ]`. O conflito é resolvido de forma gulosa: o `else` fica com o `if` mais próximo.
+Os números correspondem à enumeração do cabeçalho usado pelo analisador.
+No modo Micro C, use os nomes do TP1, como `INTEGERCONST`, `PLUS` e `ID`.
+No modo próprio também são aceitos os nomes `T_...` do cabeçalho gerado.
+Linhas vazias são ignoradas. O fim físico do arquivo fornece EOF; um token EOF
+explícito também é aceito, desde que não haja outros tokens depois dele.
+Cada registro ocupa uma linha e o lexema tem no máximo 99 bytes. Não se deve
+usar uma saída de depuração que contenha quebras de linha dentro do lexema.
+A coluna é opcional no modo próprio; o formato Micro C conserva apenas a linha.
 
 ## Testes
 
-`testes/executar.sh` compara a saída do gerador (`testes/esperado/*.gerador`) e a dos analisadores gerados (`testes/programas/<gramatica>/*.esperado`) com as saídas esperadas. Cada caso termina com a linha `status <código de saída>`. Acrescente seus próprios casos: o enunciado pede pelo menos 5 gramáticas e 3 programas aceitos e 3 rejeitados por gramática válida.
+```sh
+make test                 # inclui a compilação e os testes de Micro C
+make test-frontend        # leitura e análise de gramáticas
+make test-codegen         # autômatos, scanner e geração
+```
 
-Os programas de Micro C só rodam depois de `make microc`. O caso `rejeitado_lexico.mc` espera a mensagem "String nao terminada" do seu TP1.
+- Frontend: 40 casos e um teste dos atributos internos das subexpressões.
+- Autômatos: 33 casos de maior prefixo e 15 regex inválidas/anuláveis.
+- Scanner Micro C: escapes, conteúdo com `\0`, posição de erros e reinicialização.
+- Geração: 30 casos adicionais, incluindo prioridades, `--tokens`, `--tree`,
+  nomes de tokens em conflito e preservação das saídas quando há erro.
+- Suíte principal: 24 testes (5 gramáticas e 19 programas), incluindo três
+  programas aceitos e três rejeitados por gramática válida.
+
+As gramáticas válidas são expressões aritméticas, Micro C e a notação EBNF.
+As duas gramáticas inválidas exercitam conflito LL(1) e recursão à esquerda.
+Os exemplos existentes do TP1 em `../../tests/` continuam separados desta suíte.
+
+A compilação foi verificada com `-ansi -pedantic-errors -Wall -Wextra -Werror`.
+O C emitido pelo Flex é a exceção prevista pelo código-base. Os testes de
+memória podem ser repetidos com Valgrind usando `GERADOR` e `EXECUTOR` em
+`testes/codegen/executar.sh`.
+
+## Extras
+
+Implementado: descrição da própria notação EBNF em
+`testes/gramaticas/ebnf.ebnf` (+0,5). O analisador gerado reconhece a própria
+gramática; há três programas aceitos e três rejeitados para essa notação.
+A metagramática descreve a sintaxe; as verificações semânticas continuam sendo
+feitas pelo gerador depois da leitura.
+

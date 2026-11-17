@@ -6,7 +6,7 @@
  * proximo_token() cada vez que precisa de um novo token. Token e
  * TokenType vem do tokens.h do TP1 (livro-texto, secao 2.3.1):
  *
- *   typedef struct { TokenType tipo; char lexema[100]; int linha; } Token;
+ *   typedef struct { TokenType tipo; char lexema[100]; int linha; size_t tamanho; } Token;
  */
 #ifndef SCANNER_H
 #define SCANNER_H

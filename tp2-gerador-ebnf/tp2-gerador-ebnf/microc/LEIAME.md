@@ -1,18 +1,27 @@
-# Pasta microc/
+# Scanner Micro C integrado
 
-Aqui fica o scanner de Micro C do TP1, convertido em função para o analisador gerado com `--scanner microc` (seção 3.1 do enunciado).
+`microc.flex` é a adaptação do scanner do TP1. O scanner original permanece
+em `../../microc.flex` para consulta.
 
-Já fornecidos:
+- `tokens.h`: enumeração compartilhada e estrutura `Token`, com comprimento.
+- `scanner.h`: interface usada pelo analisador gerado.
+- `scanner_interno.h`: interface entre o Flex e o adaptador.
+- `scanner.c`: obtém o próximo token sem imprimir mensagens e preserva
+  lexemas, posição inicial e mensagens de erro.
 
-- `scanner.h`: interface usada pelo analisador gerado (`scanner_iniciar`, `proximo_token`, `scanner_finalizar`).
-- `scanner.c`: adaptador entre `microc_yylex()` e `Token`. Procure os `TODO(aluno)`.
+O scanner usa `%option prefix="microc_yy" noyywrap`. Ele retorna `TokenType`,
+inclusive para operadores de um caractere; EOF é `END_OF_FILE`. O analisador
+imprime os diagnósticos e encerra ao receber `UNDEF`.
 
-Copie do seu TP1:
+O adaptador e a rotina de finalização liberam lexemas e buffers. É possível
+reinicializar o scanner para outro arquivo. O comprimento explícito preserva
+`\0` dentro de valores de strings e caracteres. O limite da interface é
+99 bytes por lexema; entradas maiores produzem `UNDEF`.
 
-- `microc.flex`, com `%option prefix="microc_yy" noyywrap` e `return END_OF_FILE;` na regra `<<EOF>>`;
-- `tokens.h`, com `TokenType` e `Token` como no livro-texto (seção 2.3.1);
-- os demais arquivos `.c`/`.h` de que o scanner depende, como a tabela de strings.
+```sh
+make microc
+make test
+```
 
-O Makefile compila todos os `.c` desta pasta. O `lex.yy.c` gerado é compilado sem a exigência de ausência de avisos.
-
-Cuidado com tokens devolvidos pelo código ASCII (TP1, seção 5). Valores até o último item de `TokenType` (36 no `tokens.h` do livro) são sempre interpretados como `TokenType`. Por isso `!` (33) deve ser devolvido como `NOT`, e não como `'!'`.
+O código gerado pelo Flex é compilado separadamente e é a única exceção à
+exigência de ANSI C sem avisos. As demais fontes seguem as flags do projeto.

@@ -2,6 +2,8 @@
 #ifndef MICROC_TOKENS_H
 #define MICROC_TOKENS_H
 
+#include <stddef.h>
+
 typedef enum {
     /* Tokens fundamentais */
     UNDEF,          /* token indefinido (usado para reportar erros) */
@@ -31,6 +33,7 @@ typedef struct {
     TokenType tipo;
     char lexema[100];
     int linha;
+    size_t tamanho;
 } Token;
 
 #endif
